@@ -143,6 +143,21 @@ server.on("error", (err) => {
   log("HTTP ERROR", err.message);
 });
 
+// ---- Self-ping (keeps Render free tier alive) ---------------
+
+const RENDER_URL = process.env.RENDER_EXTERNAL_URL || null;
+
+if (RENDER_URL) {
+  setInterval(() => {
+    http.get(RENDER_URL, (res) => {
+      log("PING", `Self-ping status: ${res.statusCode}`);
+    }).on("error", (err) => {
+      log("PING ERROR", err.message);
+    });
+  }, 10 * 60 * 1000);
+  log("PING", `Self-ping enabled → ${RENDER_URL} (every 10 min)`);
+}
+
 // ---- DNS resolution ----------------------------------------
 
 async function resolveHost(hostname) {
