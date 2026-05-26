@@ -3,6 +3,7 @@ const { pathfinder, Movements, goals: { GoalFollow } } = require("mineflayer-pat
 const express = require("express");
 const http = require("http");
 const { WebSocketServer } = require("ws");
+const dns = require("dns").promises;
 
 // ============================================================
 // CONFIG — change everything here, nowhere else in the file
@@ -12,10 +13,12 @@ const config = {
   port: 16442,
   username: "bittubot",
   version: "1.20.1",
-  rejoinDelay: 5000, // ms to wait before reconnecting
-  antiAfkInterval: 30000, // ms between anti-AFK actions
-  joinMessage: "Hello!", // message sent on spawn
-  authmePassword: "bitu11", // AuthMe /login password — set to null to disable
+  rejoinDelay: 10000,        // base ms before first reconnect
+  maxRetryDelay: 5 * 60 * 1000, // cap backoff at 5 minutes
+  connectTimeout: 30000,     // ms to wait for initial TCP connection
+  antiAfkInterval: 30000,    // ms between anti-AFK actions
+  joinMessage: "Hello!",     // message sent on spawn
+  authmePassword: "bitu11",  // AuthMe /login password — set to null to disable
 };
 // ============================================================
 
@@ -73,6 +76,7 @@ function setState(updates) {
 
 const app = express();
 app.use(express.json());
+
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -80,16 +84,16 @@ app.use((req, res, next) => {
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
-app.get("/", (req, res) => {
-  res.send("Bot is running!")
-});
+
 app.get("/bot-api/status", (req, res) => {
   res.json(botState);
 });
+
 app.get("/bot-api/logs", (req, res) => {
   const limit = parseInt(req.query.limit) || 200;
   res.json(logBuffer.slice(-limit));
 });
+
 app.post("/bot-api/command", (req, res) => {
   const { message } = req.body || {};
   if (!message || typeof message !== "string") {
@@ -106,35 +110,61 @@ app.post("/bot-api/command", (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 const server = http.createServer(app);
+
 const wss = new WebSocketServer({ server, path: "/bot-api/ws" });
+
 wss.on("connection", (ws) => {
   wsClients.add(ws);
   log("WS", "Console connected");
+
   ws.send(JSON.stringify({ type: "state", state: botState }));
   ws.send(JSON.stringify({ type: "history", logs: logBuffer.slice(-200) }));
+
   ws.on("close", () => {
     wsClients.delete(ws);
     log("WS", "Console disconnected");
   });
+
   ws.on("error", (err) => {
     wsClients.delete(ws);
     log("WS ERROR", err.message);
   });
 });
+
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, "0.0.0.0", () => {
+
+server.listen(PORT, () => {
   log("HTTP", `Server listening on port ${PORT}`);
 });
+
 server.on("error", (err) => {
   log("HTTP ERROR", err.message);
 });
+
+// ---- DNS resolution ----------------------------------------
+
+async function resolveHost(hostname) {
+  try {
+    const addresses = await dns.resolve4(hostname);
+    if (addresses && addresses.length > 0) {
+      log("DNS", `Resolved ${hostname} → ${addresses[0]}`);
+      return addresses[0];
+    }
+  } catch (err) {
+    log("DNS", `Could not resolve ${hostname} (${err.message}) — using hostname directly`);
+  }
+  return hostname;
+}
+
 // ---- Bot factory -------------------------------------------
 
 let bot = null;
 let antiAfkTimer = null;
+let retryCount = 0;
 
-function createBot() {
+async function createBot() {
   log(
     "BOT",
     `Connecting to ${config.host}:${config.port} as ${config.username} (MC ${config.version})`,
@@ -147,8 +177,20 @@ function createBot() {
     position: null,
   });
 
+  // Pre-resolve hostname so Render's DNS can cache it
+  const resolvedHost = await resolveHost(config.host);
+
+  // Connection timeout: if the bot doesn't fire 'login' within connectTimeout
+  // ms, tear it down and retry via scheduleRejoin
+  let connectTimeoutHandle = setTimeout(() => {
+    log("ERROR", `Connection timed out after ${config.connectTimeout / 1000}s`);
+    if (bot) {
+      try { bot.end("connect timeout"); } catch (_) {}
+    }
+  }, config.connectTimeout);
+
   bot = mineflayer.createBot({
-    host: config.host,
+    host: resolvedHost,
     port: config.port,
     username: config.username,
     version: config.version,
@@ -157,8 +199,18 @@ function createBot() {
 
   bot.loadPlugin(pathfinder);
 
+  // Clear the connect timeout as soon as the TCP handshake succeeds
+  bot.once("login", () => {
+    clearTimeout(connectTimeoutHandle);
+    connectTimeoutHandle = null;
+  });
+
   // --- Spawn ------------------------------------------------
   bot.once("spawn", () => {
+    clearTimeout(connectTimeoutHandle);
+    connectTimeoutHandle = null;
+
+    retryCount = 0; // reset backoff on successful connection
     log("SPAWN", "Bot spawned successfully");
     setState({
       status: "connected",
@@ -166,6 +218,7 @@ function createBot() {
       health: bot.health,
       food: bot.food,
     });
+
     if (config.authmePassword) {
       setTimeout(() => {
         bot.chat(`/login ${config.authmePassword}`);
@@ -261,6 +314,8 @@ function createBot() {
 
   // --- Disconnect -------------------------------------------
   bot.on("end", (reason) => {
+    clearTimeout(connectTimeoutHandle);
+    connectTimeoutHandle = null;
     log("DISCONNECT", reason || "(no reason given)");
     setState({
       status: "disconnected",
@@ -275,7 +330,15 @@ function createBot() {
 
   // --- Errors -----------------------------------------------
   bot.on("error", (err) => {
-    log("ERROR", err.message);
+    if (err.code === "ETIMEDOUT") {
+      log("ERROR", `Connection timed out (ETIMEDOUT) — server may be offline or unreachable`);
+    } else if (err.code === "ECONNREFUSED") {
+      log("ERROR", `Connection refused (ECONNREFUSED) — server is not accepting connections`);
+    } else if (err.code === "ENOTFOUND") {
+      log("ERROR", `Hostname not found (ENOTFOUND) — DNS failed for ${config.host}`);
+    } else {
+      log("ERROR", err.message);
+    }
   });
 
   // --- Chat -------------------------------------------------
@@ -328,7 +391,7 @@ function createBot() {
   });
 }
 
-// ---- Rejoin logic ------------------------------------------
+// ---- Rejoin logic with exponential backoff -----------------
 
 let rejoinScheduled = false;
 
@@ -336,14 +399,21 @@ function scheduleRejoin() {
   if (rejoinScheduled) return;
   rejoinScheduled = true;
 
-  log("BOT", `Reconnecting in ${config.rejoinDelay / 1000}s…`);
+  retryCount++;
+  // Exponential backoff: 10s, 20s, 40s, 80s … capped at maxRetryDelay
+  const delay = Math.min(
+    config.rejoinDelay * Math.pow(2, retryCount - 1),
+    config.maxRetryDelay,
+  );
+
+  log("BOT", `Reconnecting in ${Math.round(delay / 1000)}s… (attempt ${retryCount})`);
   setState({ status: "reconnecting" });
 
   setTimeout(() => {
     rejoinScheduled = false;
     bot = null;
     createBot();
-  }, config.rejoinDelay);
+  }, delay);
 }
 
 // ---- Process-level safety net ------------------------------
