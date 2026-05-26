@@ -149,7 +149,12 @@ const RENDER_URL = process.env.RENDER_EXTERNAL_URL || null;
 
 if (RENDER_URL) {
   setInterval(() => {
-    http.get(RENDER_URL, (res) => {
+    const urlObj = new URL(RENDER_URL.replace("https://", "http://"));
+    http.get({
+      hostname: urlObj.hostname,
+      path: "/",
+      port: 80,
+    }, (res) => {
       log("PING", `Self-ping status: ${res.statusCode}`);
     }).on("error", (err) => {
       log("PING ERROR", err.message);
