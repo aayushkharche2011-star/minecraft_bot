@@ -73,7 +73,6 @@ function setState(updates) {
 
 const app = express();
 app.use(express.json());
-
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -81,16 +80,16 @@ app.use((req, res, next) => {
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
-
+app.get("/", (req, res) => {
+  res.send("Bot is running!")
+});
 app.get("/bot-api/status", (req, res) => {
   res.json(botState);
 });
-
 app.get("/bot-api/logs", (req, res) => {
   const limit = parseInt(req.query.limit) || 200;
   res.json(logBuffer.slice(-limit));
 });
-
 app.post("/bot-api/command", (req, res) => {
   const { message } = req.body || {};
   if (!message || typeof message !== "string") {
@@ -107,39 +106,29 @@ app.post("/bot-api/command", (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
 const server = http.createServer(app);
-
 const wss = new WebSocketServer({ server, path: "/bot-api/ws" });
-
 wss.on("connection", (ws) => {
   wsClients.add(ws);
   log("WS", "Console connected");
-
   ws.send(JSON.stringify({ type: "state", state: botState }));
   ws.send(JSON.stringify({ type: "history", logs: logBuffer.slice(-200) }));
-
   ws.on("close", () => {
     wsClients.delete(ws);
     log("WS", "Console disconnected");
   });
-
   ws.on("error", (err) => {
     wsClients.delete(ws);
     log("WS ERROR", err.message);
   });
 });
-
 const PORT = process.env.PORT || 3000;
-
-server.listen(PORT, () => {
+server.listen(PORT, "0.0.0.0", () => {
   log("HTTP", `Server listening on port ${PORT}`);
 });
-
 server.on("error", (err) => {
   log("HTTP ERROR", err.message);
 });
-
 // ---- Bot factory -------------------------------------------
 
 let bot = null;
