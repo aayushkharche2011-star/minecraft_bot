@@ -1,22 +1,14 @@
 {
-  "name": "workspace",
-  "version": "0.0.0",
-  "license": "MIT",
+  "name": "minecraft-bot",
+  "version": "1.0.0",
+  "main": "minecraft-bot.js",
   "scripts": {
-    "preinstall": "sh -c 'rm -f package-lock.json yarn.lock; case \"$npm_config_user_agent\" in pnpm/*) ;; *) echo \"Use pnpm instead\" >&2; exit 1 ;; esac'",
-    "build": "pnpm run typecheck && pnpm -r --if-present run build",
-    "typecheck:libs": "tsc --build",
-    "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck"
-  },
-  "private": true,
-  "devDependencies": {
-    "prettier": "^3.8.3",
-    "typescript": "~5.9.3"
+    "start": "node minecraft-bot.js"
   },
   "dependencies": {
-    "express": "^5.2.1",
     "mineflayer": "4.37.1",
     "mineflayer-pathfinder": "2.4.5",
+    "express": "5.2.1",
     "ws": "8.21.0"
   }
 }
