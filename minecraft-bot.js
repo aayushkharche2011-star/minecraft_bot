@@ -11,14 +11,13 @@ const dns = require("dns").promises;
 const config = {
   host: "PixelKingdom.aternos.me",
   port: 16442,
-  username: "bittubot",
+  username: "AdityaKP",
   version: "1.20.1",
-  rejoinDelay: 10000,        // base ms before first reconnect
-  maxRetryDelay: 5 * 60 * 1000, // cap backoff at 5 minutes
+  rejoinDelay: 5000,         // ms before every reconnect attempt
   connectTimeout: 30000,     // ms to wait for initial TCP connection
   antiAfkInterval: 30000,    // ms between anti-AFK actions
   joinMessage: "Hello!",     // message sent on spawn
-  authmePassword: "bitu11",  // AuthMe /login password — set to null to disable
+  authmePassword: "bobbby",  // AuthMe /login password — set to null to disable
 };
 // ============================================================
 
@@ -62,6 +61,22 @@ function log(label, ...args) {
 
 function broadcastState() {
   const payload = JSON.stringify({ type: "state", state: botState });
+  for (const ws of wsClients) {
+    if (ws.readyState === 1) ws.send(payload);
+  }
+}
+
+function broadcastPlayers() {
+  if (!bot || !bot.players) return;
+  const players = Object.keys(bot.players).filter((p) => p !== config.username);
+  const payload = JSON.stringify({ type: "players", players });
+  for (const ws of wsClients) {
+    if (ws.readyState === 1) ws.send(payload);
+  }
+}
+
+function broadcastTime(t) {
+  const payload = JSON.stringify({ type: "time", time: t });
   for (const ws of wsClients) {
     if (ws.readyState === 1) ws.send(payload);
   }
@@ -121,6 +136,10 @@ wss.on("connection", (ws) => {
 
   ws.send(JSON.stringify({ type: "state", state: botState }));
   ws.send(JSON.stringify({ type: "history", logs: logBuffer.slice(-200) }));
+  if (bot && bot.players) {
+    const players = Object.keys(bot.players).filter((p) => p !== config.username);
+    ws.send(JSON.stringify({ type: "players", players }));
+  }
 
   ws.on("close", () => {
     wsClients.delete(ws);
@@ -182,7 +201,8 @@ async function resolveHost(hostname) {
 
 let bot = null;
 let antiAfkTimer = null;
-let retryCount = 0;
+let positionTimer = null;
+let lastTimeBcast = 0;
 
 async function createBot() {
   log(
@@ -230,7 +250,6 @@ async function createBot() {
     clearTimeout(connectTimeoutHandle);
     connectTimeoutHandle = null;
 
-    retryCount = 0; // reset backoff on successful connection
     log("SPAWN", "Bot spawned successfully");
     setState({
       status: "connected",
@@ -257,6 +276,71 @@ async function createBot() {
     }
 
     startAntiAfk();
+
+    // Player tracking
+    broadcastPlayers();
+    bot.on("playerJoined", broadcastPlayers);
+    bot.on("playerLeft",   broadcastPlayers);
+
+    // Position updates every 3s
+    if (positionTimer) clearInterval(positionTimer);
+    positionTimer = setInterval(() => {
+      if (bot && bot.entity) {
+        const p = bot.entity.position;
+        setState({ position: { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) } });
+      }
+    }, 3000);
+  });
+
+  // --- Sleep in nearest bed ---------------------------------
+  let isSleeping = false;
+
+  async function sleepInNearestBed() {
+    if (isSleeping) return;
+    const bedBlock = bot.findBlock({
+      matching: (block) => block.name.endsWith("_bed"),
+      maxDistance: 32,
+    });
+    if (!bedBlock) {
+      log("SLEEP", "No bed found within 32 blocks");
+      return;
+    }
+    try {
+      await bot.sleep(bedBlock);
+      isSleeping = true;
+      log("SLEEP", `Sleeping in ${bedBlock.name} at ${bedBlock.position}`);
+      stopAntiAfk();
+    } catch (err) {
+      log("SLEEP ERROR", err.message);
+    }
+  }
+
+  bot.on("sleep", () => {
+    isSleeping = true;
+    log("SLEEP", "Bot is now sleeping");
+  });
+
+  bot.on("wake", () => {
+    isSleeping = false;
+    log("SLEEP", "Bot woke up");
+    startAntiAfk();
+  });
+
+  // Auto-sleep at night (timeOfDay > 12500 = night in Minecraft)
+  let lastSleepAttempt = 0;
+  bot.on("time", () => {
+    const t = bot.time.timeOfDay;
+    const now = Date.now();
+    // Throttle auto-sleep check to once every 30s
+    if (t > 12500 && t < 23000 && !isSleeping && now - lastSleepAttempt > 30000) {
+      lastSleepAttempt = now;
+      sleepInNearestBed();
+    }
+    // Throttled time broadcast (every 10s real time)
+    if (now - lastTimeBcast > 10000) {
+      lastTimeBcast = now;
+      broadcastTime(t);
+    }
   });
 
   // --- Anti-AFK ---------------------------------------------
@@ -329,6 +413,8 @@ async function createBot() {
       connectedAt: null,
     });
     stopAntiAfk();
+    if (positionTimer) { clearInterval(positionTimer); positionTimer = null; }
+    broadcastPlayers();
     scheduleRejoin();
   });
 
@@ -345,6 +431,8 @@ async function createBot() {
       connectedAt: null,
     });
     stopAntiAfk();
+    if (positionTimer) { clearInterval(positionTimer); positionTimer = null; }
+    broadcastPlayers();
     scheduleRejoin();
   });
 
@@ -364,6 +452,45 @@ async function createBot() {
   // --- Chat -------------------------------------------------
   bot.on("message", (message) => {
     log("CHAT", message.toString());
+  });
+
+  // --- Funny Hindi chat with player roasts ------------------
+  function getRandomOnlinePlayer(exclude) {
+    const players = Object.keys(bot.players).filter(
+      (p) => p !== config.username && p !== exclude,
+    );
+    if (players.length === 0) return null;
+    return players[Math.floor(Math.random() * players.length)];
+  }
+
+  function getFunnyReply(speaker) {
+    const victim = getRandomOnlinePlayer(speaker) || speaker;
+    const replies = [
+      `Arre ${speaker} bhai, tu pooch raha hai mujhse? Pehle ${victim} se pooch, woh bhi kuch nahi jaanta!`,
+      `${speaker} bhai, tujhe pata hai ${victim} ne aaj kitni baar mara? Main count bhool gaya!`,
+      `Main bot hoon lekin ${victim} se zyada smart hoon, yeh toh pakki baat hai!`,
+      `${speaker}, teri baat sun raha hoon... lekin ${victim} ki awaaz zyada funny lagti hai!`,
+      `Bhai ${victim} ko dekh, creeper se bhi zyada damage karta hai team ko!`,
+      `${speaker} ne mujhse baat ki! Aaj ka din special hai... ${victim} ko mat batana!`,
+      `Main 24/7 online hoon kyunki ghar pe koi nahi sunta. ${victim} bhi nahi sunta!`,
+      `${victim} bhai sun, ${speaker} ne mujhse pooch liya jo tune nahi poocha!`,
+      `Ek bot hoon main, lekin ${victim} ke build se toh meri coding better hai!`,
+      `${speaker} yaar, ${victim} aur tu dono milke bhi mujhe beat nahi kar sakte pathfinding mein!`,
+      `Bhai ${speaker}, server mein sabse zyada lag ${victim} ki wajah se aata hai, main guarantee deta hoon!`,
+      `Main sirf bot hoon, lekin ${victim} mujhse bhi zyada AFK rehta hai!`,
+    ];
+    return replies[Math.floor(Math.random() * replies.length)];
+  }
+
+  bot.on("chat", (username, message) => {
+    const lower = message.toLowerCase();
+    const botName = config.username.toLowerCase();
+    if (lower.includes(botName) || lower.includes("bot") || lower.startsWith("@adityakp")) {
+      const reply = getFunnyReply(username);
+      setTimeout(() => bot.chat(reply), 800);
+      log("CHAT-AI", `Replied to ${username}: ${reply}`);
+      return;
+    }
   });
 
   // --- Follow / Unfollow ------------------------------------
@@ -390,6 +517,20 @@ async function createBot() {
       log("FOLLOW", "Stopped following");
       startAntiAfk();
     }
+
+    if (message === "sleep") {
+      sleepInNearestBed();
+    }
+
+    if (message === "wake" || message === "wakeup") {
+      if (isSleeping) {
+        try {
+          bot.wake();
+        } catch (err) {
+          log("SLEEP ERROR", err.message);
+        }
+      }
+    }
   });
 
   // --- Health / death ---------------------------------------
@@ -411,7 +552,7 @@ async function createBot() {
   });
 }
 
-// ---- Rejoin logic with exponential backoff -----------------
+// ---- Rejoin logic ------------------------------------------
 
 let rejoinScheduled = false;
 
@@ -419,21 +560,14 @@ function scheduleRejoin() {
   if (rejoinScheduled) return;
   rejoinScheduled = true;
 
-  retryCount++;
-  // Exponential backoff: 10s, 20s, 40s, 80s … capped at maxRetryDelay
-  const delay = Math.min(
-    config.rejoinDelay * Math.pow(2, retryCount - 1),
-    config.maxRetryDelay,
-  );
-
-  log("BOT", `Reconnecting in ${Math.round(delay / 1000)}s… (attempt ${retryCount})`);
+  log("BOT", `Reconnecting in ${config.rejoinDelay / 1000}s…`);
   setState({ status: "reconnecting" });
 
   setTimeout(() => {
     rejoinScheduled = false;
     bot = null;
     createBot();
-  }, delay);
+  }, config.rejoinDelay);
 }
 
 // ---- Process-level safety net ------------------------------
