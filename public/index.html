@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>⛏ AdityaKP Bot Console</title>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:      #0d0d1a;
+      --panel:   #111128;
+      --border:  #2a5522;
+      --accent:  #5B8731;
+      --acch:    #6fa33d;
+      --green:   #55ff55;
+      --red:     #ff5555;
+      --yellow:  #ffff55;
+      --cyan:    #55ffff;
+      --blue:    #5577ff;
+      --orange:  #ffaa00;
+      --white:   #ffffff;
+      --text:    #cccccc;
+      --dim:     #55556a;
+      --font:    'Press Start 2P', monospace;
+    }
+
+    html, body { height: 100%; overflow: hidden; font-family: var(--font);
+      background: var(--bg); color: var(--text); font-size: 8px; }
+
+    ::-webkit-scrollbar { width: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+    /* ── LAYOUT ── */
+    #app { display: flex; flex-direction: column; height: 100vh; }
+
+    /* ── STATUS BAR ── */
+    #sbar {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 14px; height: 54px;
+      background: #080815; border-bottom: 2px solid var(--border);
+      flex-shrink: 0; gap: 10px;
+    }
+    .sb-grp { display: flex; align-items: center; gap: 10px; }
+    .sb-sep  { width: 1px; height: 26px; background: var(--border); }
+
+    .mc-icon { font-size: 20px; }
+    #bot-name  { font-size: 13px; color: var(--green);
+      text-shadow: 0 0 10px rgba(85,255,85,.4); }
+    #srv-addr  { font-size: 6px; color: var(--dim); margin-top: 3px; }
+
+    #stat-pill {
+      display: flex; align-items: center; gap: 7px;
+      padding: 4px 10px; border: 1px solid var(--border);
+      background: rgba(0,0,0,.35);
+    }
+    #stat-dot {
+      width: 8px; height: 8px; border-radius: 1px;
+      background: var(--red); transition: background .3s;
+    }
+    #stat-dot.connected    { background: var(--green); animation: blink 2s infinite; }
+    #stat-dot.reconnecting { background: var(--yellow); animation: blink .7s infinite; }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.35} }
+
+    #stat-lbl { font-size: 7px; }
+    #stat-lbl.connected    { color: var(--green); }
+    #stat-lbl.reconnecting { color: var(--yellow); }
+    #stat-lbl.disconnected { color: var(--red); }
+
+    #mc-ver  { font-size: 7px; color: var(--cyan); }
+    #uptime  { font-size: 6px; color: var(--dim); }
+    #ws-pill { font-size: 6px; padding: 3px 7px; border: 1px solid var(--border); }
+
+    /* ── MAIN GRID ── */
+    #main {
+      flex: 1; display: grid;
+      grid-template-columns: 218px 1fr 1fr;
+      gap: 5px; padding: 5px;
+      overflow: hidden; min-height: 0;
+    }
+
+    /* ── PANELS ── */
+    .panel {
+      background: var(--panel); border: 2px solid var(--border);
+      display: flex; flex-direction: column; overflow: hidden;
+    }
+    .phdr {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 6px 9px; font-size: 7px; color: var(--accent);
+      background: rgba(91,135,49,.1); border-bottom: 1px solid var(--border);
+      letter-spacing: 1px; flex-shrink: 0;
+    }
+    .pbody { flex: 1; overflow-y: auto; padding: 8px; min-height: 0; }
+
+    /* ── LEFT COL ── */
+    #lcol { display: flex; flex-direction: column; gap: 5px; overflow: hidden; }
+    #stats-panel   { flex-shrink: 0; }
+    #players-panel { flex: 1; min-height: 0; }
+
+    .srow { display: flex; align-items: flex-start; gap: 6px; margin-bottom: 9px; }
+    .slbl { font-size: 5px; color: var(--dim); width: 46px; flex-shrink: 0;
+      padding-top: 2px; letter-spacing: .5px; }
+    .sval { flex: 1; }
+
+    /* Hearts */
+    .hearts { display: flex; gap: 1px; flex-wrap: wrap; }
+    .heart  { font-size: 10px; line-height: 1; transition: color .3s; }
+    .heart.full  { color: #ff2222; text-shadow: 0 0 5px rgba(255,50,50,.4); }
+    .heart.empty { color: #1e0a0a; }
+
+    /* Food */
+    .foods { display: flex; gap: 1px; flex-wrap: wrap; }
+    .food  { font-size: 9px; line-height: 1; }
+    .food.empty { opacity: .18; }
+
+    #pos-val { font-size: 6px; color: var(--cyan); line-height: 1.9; }
+
+    /* Time */
+    #time-row { display: flex; align-items: center; gap: 7px; }
+    #time-icon  { font-size: 15px; }
+    #time-lbl   { font-size: 7px; }
+
+    /* Players */
+    .pitem { display: flex; align-items: center; gap: 6px;
+      padding: 4px 0; border-bottom: 1px solid rgba(91,135,49,.12); font-size: 7px; }
+    .pdot  { width: 5px; height: 5px; border-radius: 1px;
+      background: var(--green); animation: blink 3s infinite; flex-shrink: 0; }
+    #pbadge { background: var(--accent); color: #fff; padding: 1px 6px; font-size: 6px; }
+    #no-ply { font-size: 6px; color: var(--dim); }
+
+    /* ── CHAT ── */
+    .chat-line {
+      font-size: 7px; line-height: 1.7; padding: 2px 0;
+      border-bottom: 1px solid rgba(255,255,255,.03); word-break: break-word;
+    }
+    .cts  { color: var(--dim); font-size: 5px; }
+    .csys { color: var(--yellow); }
+    .cpla { color: var(--white); }
+
+    #chat-foot {
+      display: flex; gap: 4px; padding: 6px;
+      border-top: 1px solid var(--border); flex-shrink: 0;
+    }
+    #chat-inp {
+      flex: 1; background: #05050f; border: 1px solid var(--border);
+      color: var(--white); font-family: var(--font); font-size: 7px;
+      padding: 5px 8px; outline: none;
+    }
+    #chat-inp:focus { border-color: var(--accent); }
+    #chat-btn {
+      background: var(--accent); border: none; color: #fff;
+      font-family: var(--font); font-size: 7px;
+      padding: 5px 11px; cursor: pointer;
+    }
+    #chat-btn:hover { background: var(--acch); }
+
+    /* ── CONSOLE ── */
+    #fbar {
+      display: flex; gap: 3px; padding: 5px 7px;
+      border-bottom: 1px solid var(--border); flex-shrink: 0; flex-wrap: wrap;
+    }
+    .fb {
+      background: transparent; border: 1px solid var(--border); color: var(--dim);
+      font-family: var(--font); font-size: 5px; padding: 3px 6px;
+      cursor: pointer; transition: all .15s;
+    }
+    .fb:hover { border-color: var(--accent); color: var(--white); }
+    .fb.on    { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+    .ll {
+      display: flex; gap: 5px; font-size: 5.5px; line-height: 1.9;
+      border-bottom: 1px solid rgba(255,255,255,.025);
+      word-break: break-word; padding: 1px 0;
+    }
+    .lts  { color: #333344; flex-shrink: 0; white-space: nowrap; }
+    .llbl { flex-shrink: 0; white-space: nowrap; }
+    .lmsg { flex: 1; color: var(--text); }
+
+    /* ── ACTIONS ── */
+    #acts {
+      display: flex; align-items: center; flex-wrap: wrap;
+      gap: 5px; padding: 5px 10px;
+      background: #080815; border-top: 2px solid var(--border); flex-shrink: 0;
+    }
+    .asep { width: 1px; height: 22px; background: var(--border); }
+
+    .abtn {
+      background: #1a3a14; border: 1px solid var(--accent);
+      color: var(--white); font-family: var(--font); font-size: 6px;
+      padding: 5px 9px; cursor: pointer; white-space: nowrap;
+      transition: background .15s;
+    }
+    .abtn:hover  { background: var(--accent); }
+    .abtn.danger { background: #3a0f0f; border-color: var(--red); }
+    .abtn.danger:hover { background: #8b1c1c; }
+    .abtn.info   { background: #0f1e40; border-color: var(--blue); }
+    .abtn.info:hover   { background: #1a3a7a; }
+
+    .ainp {
+      background: #05050f; border: 1px solid var(--border);
+      color: var(--white); font-family: var(--font); font-size: 6px;
+      padding: 5px 7px; outline: none; width: 110px;
+    }
+    .ainp:focus { border-color: var(--accent); }
+    .ainp.wide  { width: 172px; }
+  </style>
+</head>
+<body>
+<div id="app">
+
+  <!-- STATUS BAR -->
+  <div id="sbar">
+    <div class="sb-grp">
+      <span class="mc-icon">⛏</span>
+      <div>
+        <div id="bot-name">—</div>
+        <div id="srv-addr">Not connected</div>
+      </div>
+    </div>
+    <div class="sb-grp">
+      <div id="stat-pill">
+        <div id="stat-dot"></div>
+        <span id="stat-lbl">OFFLINE</span>
+      </div>
+      <div class="sb-sep"></div>
+      <span id="mc-ver">—</span>
+      <div class="sb-sep"></div>
+      <span id="uptime">UPTIME: —</span>
+    </div>
+    <div class="sb-grp">
+      <span id="ws-pill" style="color:var(--red)">WS ✗</span>
+    </div>
+  </div>
+
+  <!-- MAIN GRID -->
+  <div id="main">
+
+    <!-- LEFT -->
+    <div id="lcol">
+      <div class="panel" id="stats-panel">
+        <div class="phdr">◆ STATS</div>
+        <div class="pbody">
+          <div class="srow">
+            <span class="slbl">HEALTH</span>
+            <div class="sval hearts" id="health-bar"></div>
+          </div>
+          <div class="srow">
+            <span class="slbl">HUNGER</span>
+            <div class="sval foods" id="hunger-bar"></div>
+          </div>
+          <div class="srow" style="margin-top:10px">
+            <span class="slbl">TIME</span>
+            <div class="sval" id="time-row">
+              <span id="time-icon">☀️</span>
+              <span id="time-lbl" style="color:var(--yellow)">DAY</span>
+            </div>
+          </div>
+          <div class="srow">
+            <span class="slbl">POS</span>
+            <div class="sval" id="pos-val">—</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" id="players-panel">
+        <div class="phdr">
+          <span>◆ PLAYERS</span>
+          <span id="pbadge">0</span>
+        </div>
+        <div class="pbody" id="ply-list">
+          <div id="no-ply">No players online</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- CHAT -->
+    <div class="panel">
+      <div class="phdr">◆ CHAT</div>
+      <div class="pbody" id="chat-body"></div>
+      <div id="chat-foot">
+        <input id="chat-inp" type="text" placeholder="Send message to server...">
+        <button id="chat-btn">➤ SEND</button>
+      </div>
+    </div>
+
+    <!-- CONSOLE -->
+    <div class="panel">
+      <div class="phdr">◆ CONSOLE LOG</div>
+      <div id="fbar">
+        <button class="fb on" data-f="ALL">ALL</button>
+        <button class="fb" data-f="BOT">BOT</button>
+        <button class="fb" data-f="CHAT">CHAT</button>
+        <button class="fb" data-f="AFK">ANTI-AFK</button>
+        <button class="fb" data-f="ERR">ERRORS</button>
+        <button class="fb" data-f="FOLLOW">FOLLOW</button>
+      </div>
+      <div class="pbody" id="con-log"></div>
+    </div>
+
+  </div>
+
+  <!-- ACTIONS BAR -->
+  <div id="acts">
+    <input class="ainp" id="fol-inp" placeholder="Player name...">
+    <button class="abtn" id="btn-fol">▶ FOLLOW</button>
+    <button class="abtn" id="btn-unfol">■ UNFOLLOW</button>
+    <div class="asep"></div>
+    <button class="abtn info" id="btn-sleep">😴 SLEEP</button>
+    <button class="abtn info" id="btn-wake">☀️ WAKE</button>
+    <div class="asep"></div>
+    <button class="abtn danger" id="btn-kill">☠ KILL</button>
+    <div class="asep"></div>
+    <input class="ainp wide" id="cmd-inp" placeholder="Custom command or /command...">
+    <button class="abtn" id="btn-cmd">➤ SEND</button>
+  </div>
+
+</div>
+<script>
+// ── STATE ──────────────────────────────────────────────────
+let ws, allLogs = [], filter = 'ALL', uptmr = null, pcol = {}, ci = 0;
+const COLORS = ['#55ffff','#ff55ff','#ffaa00','#77ff77','#ff9944','#bb77ff','#55aaff','#ffdd55'];
+const pc = n => { if (!pcol[n]) pcol[n] = COLORS[ci++ % COLORS.length]; return pcol[n]; };
+
+// ── WEBSOCKET ───────────────────────────────────────────────
+function connect() {
+  const p = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${p}//${location.host}/bot-api/ws`);
+  pill('⟳ CONNECTING', 'var(--yellow)');
+  ws.onopen  = () => pill('✓ WS', 'var(--green)');
+  ws.onerror = () => pill('✗ WS', 'var(--red)');
+  ws.onclose = () => { pill('✗ WS', 'var(--red)'); setTimeout(connect, 3000); };
+  ws.onmessage = ({ data }) => {
+    try {
+      const m = JSON.parse(data);
+      if      (m.type === 'state')   onState(m.state);
+      else if (m.type === 'log')     addLog(m, true);
+      else if (m.type === 'history') { m.logs.forEach(l => addLog(l, false)); scrBoth(); }
+      else if (m.type === 'players') onPlayers(m.players);
+      else if (m.type === 'time')    onTime(m.time);
+    } catch(_) {}
+  };
+}
+function pill(t, c) { const e = $('ws-pill'); e.textContent = t; e.style.color = c; }
+
+// ── STATE ───────────────────────────────────────────────────
+function onState(s) {
+  $('bot-name').textContent  = s.username || '—';
+  $('srv-addr').textContent  = s.server   || '—';
+  $('mc-ver').textContent    = s.version  ? `MC ${s.version}` : '—';
+
+  const dot = $('stat-dot'), lbl = $('stat-lbl');
+  dot.className = s.status || '';
+  lbl.className = s.status || '';
+  lbl.textContent = (s.status || 'offline').toUpperCase();
+
+  hearts(s.health);
+  food(s.food);
+
+  $('pos-val').textContent = s.position
+    ? `X ${s.position.x}  Y ${s.position.y}  Z ${s.position.z}` : '—';
+
+  clearInterval(uptmr);
+  if (s.connectedAt && s.status === 'connected') {
+    const t0 = new Date(s.connectedAt).getTime();
+    const tick = () => {
+      const d = Math.floor((Date.now()-t0)/1000);
+      $('uptime').textContent = `UPTIME: ${hms(d)}`;
+    };
+    tick(); uptmr = setInterval(tick, 1000);
+  } else $('uptime').textContent = 'UPTIME: —';
+}
+
+function hms(s) {
+  return [Math.floor(s/3600),Math.floor(s%3600/60),s%60].map(v=>String(v).padStart(2,'0')).join(':');
+}
+
+// ── BARS ────────────────────────────────────────────────────
+function hearts(hp) {
+  const el = $('health-bar'); el.innerHTML = '';
+  const h = hp != null ? Math.min(20, Math.max(0, hp)) : 0;
+  for (let i = 0; i < 10; i++) {
+    const s = ce('span');
+    s.className = 'heart';
+    if (h >= (i+1)*2)     { s.classList.add('full');  s.textContent = '♥'; }
+    else if (h >= i*2+1)  { s.classList.add('full');  s.textContent = '♥'; s.style.opacity = '.5'; }
+    else                  { s.classList.add('empty'); s.textContent = '♡'; }
+    el.appendChild(s);
+  }
+}
+function food(fp) {
+  const el = $('hunger-bar'); el.innerHTML = '';
+  const f = fp != null ? Math.min(20, Math.max(0, fp)) : 0;
+  for (let i = 0; i < 10; i++) {
+    const s = ce('span');
+    s.className = 'food ' + (f >= (i+1)*2 ? 'full' : 'empty');
+    s.textContent = '🍗';
+    el.appendChild(s);
+  }
+}
+
+// ── TIME ────────────────────────────────────────────────────
+function onTime(t) {
+  const icon = $('time-icon'), lbl = $('time-lbl');
+  if      (t < 6000)  { icon.textContent='☀️';  lbl.textContent='DAY';       lbl.style.color='var(--yellow)'; }
+  else if (t < 12000) { icon.textContent='🌅';  lbl.textContent='AFTERNOON'; lbl.style.color='#ffcc55'; }
+  else if (t < 13800) { icon.textContent='🌆';  lbl.textContent='DUSK';      lbl.style.color='#ff9933'; }
+  else if (t < 22200) { icon.textContent='🌙';  lbl.textContent='NIGHT';     lbl.style.color='#8899ff'; }
+  else                { icon.textContent='🌄';  lbl.textContent='DAWN';      lbl.style.color='#ffaa55'; }
+}
+
+// ── PLAYERS ─────────────────────────────────────────────────
+function onPlayers(list) {
+  $('pbadge').textContent = list.length;
+  const el = $('ply-list');
+  if (!list.length) { el.innerHTML = '<div id="no-ply">No players online</div>'; return; }
+  el.innerHTML = list.map(p =>
+    `<div class="pitem"><div class="pdot"></div><span style="color:${pc(p)}">${esc(p)}</span></div>`
+  ).join('');
+}
+
+// ── LOG COLORS ───────────────────────────────────────────────
+const LC = {
+  BOT:'#55ff55',SPAWN:'#77ff77',DNS:'#55aaff',AUTHME:'#ffaa00',
+  CHAT:'#aaffaa','CHAT-AI':'#55ffcc',CONSOLE:'#cc77ff',
+  'ANTI-AFK':'#5577ff','ANTI-AFK ERROR':'#ff7799',
+  ERROR:'#ff5555',KICKED:'#ff5555','WS ERROR':'#ff5555',
+  'HTTP ERROR':'#ff5555','UNCAUGHT EXCEPTION':'#ff5555',
+  DISCONNECT:'#ffff55','UNHANDLED REJECTION':'#ffff55',
+  FOLLOW:'#55ffff',SLEEP:'#cc77ff','SLEEP ERROR':'#ff5555',
+  PING:'#555577','PING ERROR':'#ff9933',
+  HTTP:'#555577',WS:'#555577',
+};
+const lc = l => LC[l] || '#999999';
+
+// ── LOGS ────────────────────────────────────────────────────
+function addLog(e, scroll) {
+  allLogs.push(e);
+  if (allLogs.length > 500) allLogs.shift();
+  if (e.label === 'CHAT') addChat(e.message, e.ts);
+  if (passes(e, filter)) { appendLine(e); if (scroll) scrCon(); }
+}
+
+function passes(e, f) {
+  if (f==='ALL')    return true;
+  if (f==='BOT')    return ['BOT','SPAWN','DNS','AUTHME','PING'].includes(e.label);
+  if (f==='CHAT')   return ['CHAT','CHAT-AI','CONSOLE'].includes(e.label);
+  if (f==='AFK')    return e.label.startsWith('ANTI-AFK');
+  if (f==='ERR')    return ['ERROR','KICKED','DISCONNECT','WS ERROR','HTTP ERROR',
+                             'UNCAUGHT EXCEPTION','UNHANDLED REJECTION','SLEEP ERROR'].includes(e.label);
+  if (f==='FOLLOW') return ['FOLLOW','SLEEP','SLEEP ERROR'].includes(e.label);
+  return true;
+}
+
+function appendLine(e) {
+  const el = $('con-log');
+  const ts = e.ts ? new Date(e.ts).toLocaleTimeString('en',{hour12:false}) : '';
+  const d  = ce('div'); d.className = 'll';
+  d.innerHTML =
+    `<span class="lts">${ts}</span>` +
+    `<span class="llbl" style="color:${lc(e.label)}">[${esc(e.label)}]</span>` +
+    `<span class="lmsg">${esc(e.message)}</span>`;
+  el.appendChild(d);
+  while (el.children.length > 300) el.removeChild(el.firstChild);
+}
+
+function rerender() {
+  const el = $('con-log'); el.innerHTML = '';
+  allLogs.filter(e => passes(e, filter)).slice(-300).forEach(e => appendLine(e));
+  scrCon();
+}
+
+function scrCon()  { const e = $('con-log');  e.scrollTop = e.scrollHeight; }
+function scrChat() { const e = $('chat-body'); e.scrollTop = e.scrollHeight; }
+function scrBoth() { scrCon(); scrChat(); }
+
+// ── CHAT PANEL ───────────────────────────────────────────────
+function addChat(msg, ts) {
+  const el = $('chat-body'), d = ce('div'); d.className = 'chat-line';
+  const t  = ts ? new Date(ts).toLocaleTimeString('en',{hour12:false,hour:'2-digit',minute:'2-digit'}) : '';
+  const pm = msg.match(/^<([^>]+)>\s*(.*)/);
+  if (pm) {
+    d.innerHTML =
+      `<span class="cts">${t}</span> ` +
+      `<span style="color:${pc(pm[1])}">&lt;${esc(pm[1])}&gt;</span> ` +
+      `<span class="cpla">${esc(pm[2])}</span>`;
+  } else {
+    d.innerHTML = `<span class="cts">${t}</span> <span class="csys">${esc(msg)}</span>`;
+  }
+  el.appendChild(d);
+  while (el.children.length > 50) el.removeChild(el.firstChild);
+  scrChat();
+}
+
+// ── SEND ─────────────────────────────────────────────────────
+async function send(msg) {
+  if (!msg || !msg.trim()) return;
+  try {
+    const r = await fetch('/bot-api/command', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: msg.trim() }),
+    });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      addLog({ ts: new Date().toISOString(), label: 'ERROR', message: j.error || 'Command failed' }, true);
+    }
+  } catch(err) {
+    addLog({ ts: new Date().toISOString(), label: 'ERROR', message: err.message }, true);
+  }
+}
+
+// ── UTIL ─────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const ce = t  => document.createElement(t);
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── WIRING ───────────────────────────────────────────────────
+// Filter buttons
+document.querySelectorAll('.fb').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('.fb').forEach(x => x.classList.remove('on'));
+  b.classList.add('on'); filter = b.dataset.f; rerender();
+}));
+
+// Chat
+const ci_ = $('chat-inp');
+$('chat-btn').addEventListener('click', () => { send(ci_.value); ci_.value = ''; });
+ci_.addEventListener('keydown', e => { if (e.key==='Enter') { send(ci_.value); ci_.value=''; } });
+
+// Actions
+$('btn-fol').addEventListener('click',   () => { const n=$('fol-inp').value.trim(); if(n) send(`follow ${n}`); });
+$('btn-unfol').addEventListener('click', () => send('unfollow'));
+$('btn-sleep').addEventListener('click', () => send('sleep'));
+$('btn-wake').addEventListener('click',  () => send('wake'));
+$('btn-kill').addEventListener('click',  () => { if(confirm('Send /kill to bot?')) send('/kill'); });
+
+const ci2 = $('cmd-inp');
+$('btn-cmd').addEventListener('click', () => { send(ci2.value); ci2.value=''; });
+ci2.addEventListener('keydown', e => { if(e.key==='Enter') { send(ci2.value); ci2.value=''; } });
+
+// ── INIT ─────────────────────────────────────────────────────
+hearts(null); food(null); connect();
+</script>
+</body>
+</html>
