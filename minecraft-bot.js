@@ -4,6 +4,7 @@ const express = require("express");
 const http = require("http");
 const { WebSocketServer } = require("ws");
 const dns = require("dns").promises;
+const path = require("path");
 
 // ============================================================
 // CONFIG — change everything here, nowhere else in the file
@@ -13,18 +14,16 @@ const config = {
   port: 16442,
   username: "AdityaKP",
   version: "1.20.1",
-  rejoinDelay: 5000,         // ms before every reconnect attempt
-  connectTimeout: 30000,     // ms to wait for initial TCP connection
-  antiAfkInterval: 30000,    // ms between anti-AFK actions
-  joinMessage: "Hello!",     // message sent on spawn
-  authmePassword: "bobbby",  // AuthMe /login password — set to null to disable
+  rejoinDelay: 5000,
+  connectTimeout: 30000,
+  antiAfkInterval: 30000,
+  joinMessage: "Hello!",
+  authmePassword: "bobbby",
 };
 // ============================================================
 
-// ---- State -------------------------------------------------
-
 let botState = {
-  status: "disconnected", // 'connected' | 'disconnected' | 'reconnecting'
+  status: "disconnected",
   server: `${config.host}:${config.port}`,
   username: config.username,
   version: config.version,
@@ -39,8 +38,6 @@ const LOG_BUFFER_SIZE = 500;
 const logBuffer = [];
 const wsClients = new Set();
 
-// ---- Helpers -----------------------------------------------
-
 function timestamp() {
   return new Date().toISOString();
 }
@@ -50,9 +47,7 @@ function log(label, ...args) {
   const entry = { ts: timestamp(), label, message };
   logBuffer.push(entry);
   if (logBuffer.length > LOG_BUFFER_SIZE) logBuffer.shift();
-
   console.log(`[${entry.ts}] [${label}]`, message);
-
   const payload = JSON.stringify({ type: "log", ...entry });
   for (const ws of wsClients) {
     if (ws.readyState === 1) ws.send(payload);
@@ -100,6 +95,12 @@ app.use((req, res, next) => {
   next();
 });
 
+// Serve dashboard
+app.use(express.static(path.join(__dirname, "public")));
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
+});
+
 app.get("/bot-api/status", (req, res) => {
   res.json(botState);
 });
@@ -133,19 +134,16 @@ const wss = new WebSocketServer({ server, path: "/bot-api/ws" });
 wss.on("connection", (ws) => {
   wsClients.add(ws);
   log("WS", "Console connected");
-
   ws.send(JSON.stringify({ type: "state", state: botState }));
   ws.send(JSON.stringify({ type: "history", logs: logBuffer.slice(-200) }));
   if (bot && bot.players) {
     const players = Object.keys(bot.players).filter((p) => p !== config.username);
     ws.send(JSON.stringify({ type: "players", players }));
   }
-
   ws.on("close", () => {
     wsClients.delete(ws);
     log("WS", "Console disconnected");
   });
-
   ws.on("error", (err) => {
     wsClients.delete(ws);
     log("WS ERROR", err.message);
@@ -154,7 +152,7 @@ wss.on("connection", (ws) => {
 
 const PORT = process.env.PORT || 3000;
 
-server.listen(PORT, () => {
+server.listen(PORT, "0.0.0.0", () => {
   log("HTTP", `Server listening on port ${PORT}`);
 });
 
@@ -162,7 +160,7 @@ server.on("error", (err) => {
   log("HTTP ERROR", err.message);
 });
 
-// ---- Self-ping (keeps Render free tier alive) ---------------
+// ---- Self-ping ---------------------------------------------
 
 const RENDER_URL = process.env.RENDER_EXTERNAL_URL || null;
 
@@ -205,28 +203,14 @@ let positionTimer = null;
 let lastTimeBcast = 0;
 
 async function createBot() {
-  log(
-    "BOT",
-    `Connecting to ${config.host}:${config.port} as ${config.username} (MC ${config.version})`,
-  );
-  setState({
-    status: "reconnecting",
-    connectedAt: null,
-    health: null,
-    food: null,
-    position: null,
-  });
+  log("BOT", `Connecting to ${config.host}:${config.port} as ${config.username} (MC ${config.version})`);
+  setState({ status: "reconnecting", connectedAt: null, health: null, food: null, position: null });
 
-  // Pre-resolve hostname so Render's DNS can cache it
   const resolvedHost = await resolveHost(config.host);
 
-  // Connection timeout: if the bot doesn't fire 'login' within connectTimeout
-  // ms, tear it down and retry via scheduleRejoin
   let connectTimeoutHandle = setTimeout(() => {
     log("ERROR", `Connection timed out after ${config.connectTimeout / 1000}s`);
-    if (bot) {
-      try { bot.end("connect timeout"); } catch (_) {}
-    }
+    if (bot) { try { bot.end("connect timeout"); } catch (_) {} }
   }, config.connectTimeout);
 
   bot = mineflayer.createBot({
@@ -239,30 +223,21 @@ async function createBot() {
 
   bot.loadPlugin(pathfinder);
 
-  // Clear the connect timeout as soon as the TCP handshake succeeds
   bot.once("login", () => {
     clearTimeout(connectTimeoutHandle);
     connectTimeoutHandle = null;
   });
 
-  // --- Spawn ------------------------------------------------
   bot.once("spawn", () => {
     clearTimeout(connectTimeoutHandle);
     connectTimeoutHandle = null;
-
     log("SPAWN", "Bot spawned successfully");
-    setState({
-      status: "connected",
-      connectedAt: new Date().toISOString(),
-      health: bot.health,
-      food: bot.food,
-    });
+    setState({ status: "connected", connectedAt: new Date().toISOString(), health: bot.health, food: bot.food });
 
     if (config.authmePassword) {
       setTimeout(() => {
         bot.chat(`/login ${config.authmePassword}`);
         log("AUTHME", "Login command sent");
-
         if (config.joinMessage) {
           setTimeout(() => {
             bot.chat(config.joinMessage);
@@ -276,13 +251,10 @@ async function createBot() {
     }
 
     startAntiAfk();
-
-    // Player tracking
     broadcastPlayers();
     bot.on("playerJoined", broadcastPlayers);
-    bot.on("playerLeft",   broadcastPlayers);
+    bot.on("playerLeft", broadcastPlayers);
 
-    // Position updates every 3s
     if (positionTimer) clearInterval(positionTimer);
     positionTimer = setInterval(() => {
       if (bot && bot.entity) {
@@ -292,7 +264,6 @@ async function createBot() {
     }, 3000);
   });
 
-  // --- Sleep in nearest bed ---------------------------------
   let isSleeping = false;
 
   async function sleepInNearestBed() {
@@ -301,10 +272,7 @@ async function createBot() {
       matching: (block) => block.name.endsWith("_bed"),
       maxDistance: 32,
     });
-    if (!bedBlock) {
-      log("SLEEP", "No bed found within 32 blocks");
-      return;
-    }
+    if (!bedBlock) { log("SLEEP", "No bed found within 32 blocks"); return; }
     try {
       await bot.sleep(bedBlock);
       isSleeping = true;
@@ -315,150 +283,87 @@ async function createBot() {
     }
   }
 
-  bot.on("sleep", () => {
-    isSleeping = true;
-    log("SLEEP", "Bot is now sleeping");
-  });
+  bot.on("sleep", () => { isSleeping = true; log("SLEEP", "Bot is now sleeping"); });
+  bot.on("wake", () => { isSleeping = false; log("SLEEP", "Bot woke up"); startAntiAfk(); });
 
-  bot.on("wake", () => {
-    isSleeping = false;
-    log("SLEEP", "Bot woke up");
-    startAntiAfk();
-  });
-
-  // Auto-sleep at night (timeOfDay > 12500 = night in Minecraft)
   let lastSleepAttempt = 0;
   bot.on("time", () => {
     const t = bot.time.timeOfDay;
     const now = Date.now();
-    // Throttle auto-sleep check to once every 30s
     if (t > 12500 && t < 23000 && !isSleeping && now - lastSleepAttempt > 30000) {
       lastSleepAttempt = now;
       sleepInNearestBed();
     }
-    // Throttled time broadcast (every 10s real time)
     if (now - lastTimeBcast > 10000) {
       lastTimeBcast = now;
       broadcastTime(t);
     }
   });
 
-  // --- Anti-AFK ---------------------------------------------
   function startAntiAfk() {
     stopAntiAfk();
-
     antiAfkTimer = setInterval(() => {
       if (!bot || !bot.entity) return;
-
       const action = Math.floor(Math.random() * 3);
-
       try {
         if (action === 0) {
           const directions = ["forward", "back", "left", "right"];
           const dir = directions[Math.floor(Math.random() * directions.length)];
           bot.setControlState(dir, true);
-          setTimeout(
-            () => {
-              if (bot) bot.setControlState(dir, false);
-            },
-            1000 + Math.random() * 1000,
-          );
+          setTimeout(() => { if (bot) bot.setControlState(dir, false); }, 1000 + Math.random() * 1000);
           log("ANTI-AFK", `Walking ${dir}`);
         } else if (action === 1) {
           bot.setControlState("jump", true);
-          setTimeout(() => {
-            if (bot) bot.setControlState("jump", false);
-          }, 300);
+          setTimeout(() => { if (bot) bot.setControlState("jump", false); }, 300);
           log("ANTI-AFK", "Jumping");
         } else {
           const yaw = (Math.random() * 2 - 1) * Math.PI;
           const pitch = (Math.random() - 0.5) * Math.PI;
           bot.look(yaw, pitch, false);
-          log(
-            "ANTI-AFK",
-            `Looking at yaw=${yaw.toFixed(2)} pitch=${pitch.toFixed(2)}`,
-          );
+          log("ANTI-AFK", `Looking at yaw=${yaw.toFixed(2)} pitch=${pitch.toFixed(2)}`);
         }
-      } catch (err) {
-        log("ANTI-AFK ERROR", err.message);
-      }
+      } catch (err) { log("ANTI-AFK ERROR", err.message); }
     }, config.antiAfkInterval);
-
-    log(
-      "ANTI-AFK",
-      `Scheduler started (every ${config.antiAfkInterval / 1000}s)`,
-    );
+    log("ANTI-AFK", `Scheduler started (every ${config.antiAfkInterval / 1000}s)`);
   }
 
   function stopAntiAfk() {
-    if (antiAfkTimer) {
-      clearInterval(antiAfkTimer);
-      antiAfkTimer = null;
-    }
+    if (antiAfkTimer) { clearInterval(antiAfkTimer); antiAfkTimer = null; }
   }
 
-  // --- Kick -------------------------------------------------
   bot.on("kicked", (reason) => {
     let readable = reason;
-    try {
-      const parsed = JSON.parse(reason);
-      readable = parsed.text || parsed.translate || reason;
-    } catch (_) {}
+    try { const parsed = JSON.parse(reason); readable = parsed.text || parsed.translate || reason; } catch (_) {}
     log("KICKED", readable);
-    setState({
-      status: "disconnected",
-      health: null,
-      food: null,
-      position: null,
-      connectedAt: null,
-    });
+    setState({ status: "disconnected", health: null, food: null, position: null, connectedAt: null });
     stopAntiAfk();
     if (positionTimer) { clearInterval(positionTimer); positionTimer = null; }
     broadcastPlayers();
     scheduleRejoin();
   });
 
-  // --- Disconnect -------------------------------------------
   bot.on("end", (reason) => {
     clearTimeout(connectTimeoutHandle);
     connectTimeoutHandle = null;
     log("DISCONNECT", reason || "(no reason given)");
-    setState({
-      status: "disconnected",
-      health: null,
-      food: null,
-      position: null,
-      connectedAt: null,
-    });
+    setState({ status: "disconnected", health: null, food: null, position: null, connectedAt: null });
     stopAntiAfk();
     if (positionTimer) { clearInterval(positionTimer); positionTimer = null; }
     broadcastPlayers();
     scheduleRejoin();
   });
 
-  // --- Errors -----------------------------------------------
   bot.on("error", (err) => {
-    if (err.code === "ETIMEDOUT") {
-      log("ERROR", `Connection timed out (ETIMEDOUT) — server may be offline or unreachable`);
-    } else if (err.code === "ECONNREFUSED") {
-      log("ERROR", `Connection refused (ECONNREFUSED) — server is not accepting connections`);
-    } else if (err.code === "ENOTFOUND") {
-      log("ERROR", `Hostname not found (ENOTFOUND) — DNS failed for ${config.host}`);
-    } else {
-      log("ERROR", err.message);
-    }
+    if (err.code === "ETIMEDOUT") log("ERROR", `Connection timed out (ETIMEDOUT)`);
+    else if (err.code === "ECONNREFUSED") log("ERROR", `Connection refused (ECONNREFUSED)`);
+    else if (err.code === "ENOTFOUND") log("ERROR", `Hostname not found (ENOTFOUND)`);
+    else log("ERROR", err.message);
   });
 
-  // --- Chat -------------------------------------------------
-  bot.on("message", (message) => {
-    log("CHAT", message.toString());
-  });
+  bot.on("message", (message) => { log("CHAT", message.toString()); });
 
-  // --- Funny Hindi chat with player roasts ------------------
   function getRandomOnlinePlayer(exclude) {
-    const players = Object.keys(bot.players).filter(
-      (p) => p !== config.username && p !== exclude,
-    );
+    const players = Object.keys(bot.players).filter((p) => p !== config.username && p !== exclude);
     if (players.length === 0) return null;
     return players[Math.floor(Math.random() * players.length)];
   }
@@ -476,8 +381,6 @@ async function createBot() {
       `${victim} bhai sun, ${speaker} ne mujhse pooch liya jo tune nahi poocha!`,
       `Ek bot hoon main, lekin ${victim} ke build se toh meri coding better hai!`,
       `${speaker} yaar, ${victim} aur tu dono milke bhi mujhe beat nahi kar sakte pathfinding mein!`,
-      `Bhai ${speaker}, server mein sabse zyada lag ${victim} ki wajah se aata hai, main guarantee deta hoon!`,
-      `Main sirf bot hoon, lekin ${victim} mujhse bhi zyada AFK rehta hai!`,
     ];
     return replies[Math.floor(Math.random() * replies.length)];
   }
@@ -491,18 +394,10 @@ async function createBot() {
       log("CHAT-AI", `Replied to ${username}: ${reply}`);
       return;
     }
-  });
-
-  // --- Follow / Unfollow ------------------------------------
-  bot.on("chat", (username, message) => {
     if (message.startsWith("follow")) {
       const targetName = message.split(" ")[1] || username;
       const playerEntity = bot.players[targetName]?.entity;
-      if (!playerEntity) {
-        bot.chat("Player not found!");
-        log("FOLLOW", `Player not found: ${targetName}`);
-        return;
-      }
+      if (!playerEntity) { bot.chat("Player not found!"); log("FOLLOW", `Player not found: ${targetName}`); return; }
       const movements = new Movements(bot);
       bot.pathfinder.setMovements(movements);
       bot.pathfinder.setGoal(new GoalFollow(playerEntity, 2), true);
@@ -510,46 +405,24 @@ async function createBot() {
       log("FOLLOW", `Now following ${targetName}`);
       stopAntiAfk();
     }
-
     if (message === "unfollow") {
       bot.pathfinder.setGoal(null);
       bot.chat("Stopped following!");
       log("FOLLOW", "Stopped following");
       startAntiAfk();
     }
-
-    if (message === "sleep") {
-      sleepInNearestBed();
-    }
-
+    if (message === "sleep") sleepInNearestBed();
     if (message === "wake" || message === "wakeup") {
-      if (isSleeping) {
-        try {
-          bot.wake();
-        } catch (err) {
-          log("SLEEP ERROR", err.message);
-        }
-      }
+      if (isSleeping) { try { bot.wake(); } catch (err) { log("SLEEP ERROR", err.message); } }
     }
   });
 
-  // --- Health / death ---------------------------------------
   bot.on("death", () => {
     log("BOT", "Bot died — respawning");
-    try {
-      if (bot && bot.respawn) {
-        bot.respawn();
-      }
-    } catch (err) {
-      log("RESPAWN ERROR", err.message);
-    }
+    try { if (bot && bot.respawn) bot.respawn(); } catch (err) { log("RESPAWN ERROR", err.message); }
   });
 
-  bot.on("health", () => {
-    if (bot) {
-      setState({ health: bot.health, food: bot.food });
-    }
-  });
+  bot.on("health", () => { if (bot) setState({ health: bot.health, food: bot.food }); });
 }
 
 // ---- Rejoin logic ------------------------------------------
@@ -559,10 +432,8 @@ let rejoinScheduled = false;
 function scheduleRejoin() {
   if (rejoinScheduled) return;
   rejoinScheduled = true;
-
   log("BOT", `Reconnecting in ${config.rejoinDelay / 1000}s…`);
   setState({ status: "reconnecting" });
-
   setTimeout(() => {
     rejoinScheduled = false;
     bot = null;
